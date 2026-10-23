@@ -4,10 +4,19 @@ import os
 import time
 from scipy.stats import poisson
 from datetime import datetime
+from flask import Flask
+import threading
 
 # Leemos las claves secretas desde Render
-TELEGRAM_TOKEN = os.environ.get("AAETo7OZJF5ENVXi_VeooP0i_Q2g45Wue7I")
-TELEGRAM_CHAT_ID = os.environ.get("8126804019")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+# Configuramos el servidor web (Render necesita esto para darnos el plan gratis)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "El Bot de Fútbol está corriendo y vigilando los partidos."
 
 LIGAS_TOP = {
     "eng.1": "Premier League", "eng.3": "League One", "esp.1": "La Liga",
@@ -22,11 +31,13 @@ MEMORIA_EQUIPOS = {}
 
 def enviar_alerta_telegram(mensaje):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Faltan credenciales de Telegram")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
     try:
         requests.post(url, json=payload, timeout=5)
+        print(f"✅ Alerta enviada a Telegram")
     except Exception as e:
         print(f"Error Telegram: {e}")
 
@@ -153,10 +164,19 @@ def escanear_partidos():
                     )
                     print(mensaje)
                     enviar_alerta_telegram(mensaje)
-        except Exception:
-            continue
+        except Exception as e:
+            pass
 
-# Bucle infinito
-while True:
-    escanear_partidos()
-    time.sleep(300) # Espera 5 minutos
+# Esta función corre el bot en un hilo aparte para que no bloquee la página web
+def bucle_bot():
+    while True:
+        escanear_partidos()
+        time.sleep(300) # Espera 5 minutos
+
+# Iniciamos el hilo del bot
+threading.Thread(target=bucle_bot, daemon=True).start()
+
+# Render necesita esta parte final para mantener la app encendida
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
