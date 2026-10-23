@@ -5,7 +5,6 @@ from scipy.stats import poisson
 from datetime import datetime
 from flask import Flask
 
-# Leemos las variables
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -21,26 +20,23 @@ LIGAS_TOP = {
 }
 
 MEMORIA_EQUIPOS = {}
+# 🧠 LIBRETA DE MEMORIA: Aquí guardaremos los partidos que ya alertamos
+ALERTAS_ENVIADAS = set()
 
-# --- FUNCIÓN DE TELEGRAM CON DIAGNÓSTICO ---
 def enviar_alerta_telegram(mensaje):
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     
     if not token or not chat_id:
-        return f"❌ ERROR FATAL: Faltan las variables en Render. Token leído: '{token}'. ChatID leído: '{chat_id}'"
+        return "❌ ERROR FATAL: Faltan variables."
         
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": mensaje, "parse_mode": "Markdown"}
     
     try:
-        respuesta = requests.post(url, json=payload, timeout=5)
-        if respuesta.status_code == 200:
-            return "✅ ¡ÉXITO! El mensaje llegó a Telegram."
-        else:
-            return f"❌ ERROR DE TELEGRAM: Código {respuesta.status_code}. Detalle: {respuesta.text}"
+        requests.post(url, json=payload, timeout=5)
     except Exception as e:
-        return f"❌ ERROR DE CONEXIÓN: {e}"
+        print(f"Error Telegram: {e}")
 
 def obtener_perfil_equipo(liga, team_id):
     if team_id in MEMORIA_EQUIPOS:
@@ -147,44 +143,44 @@ def escanear_partidos():
                     prob_under = sum(poisson.pmf(i, goles_esperados_ajustados) for i in range(goles_necesarios))
                     prob_over = (1 - prob_under) * 100
                 
-                # --- FILTROS DE REALISMO (Minuto 55+ y Probabilidad entre 60% y 80%) ---
+                # Filtro de minuto y probabilidad
                 if minuto >= 55:
                     if (prob_over > 60 and prob_over < 80) or ((100 - prob_over) > 60 and (100 - prob_over) < 80):
-                        alertas_encontradas += 1
                         recomendacion = "OVER" if prob_over > 60 else "UNDER"
-                        mensaje = (
-                            f"🚨 *¡ALERTA EN VIVO!* 🚨\n"
-                            f"⚽ *[{liga_nombre}]* {nombre}\n"
-                            f"⏱️ Minuto: {minuto}'\n"
-                            f"📊 Marcador: {score_local} - {score_visitante}\n"
-                            f"📈 Stats: {tiros_totales} tiros | {corners_totales} córners\n"
-                            f"⚙️ Ritmo: {factor_ritmo:.2f}x\n"
-                            f"🎯 Over 2.5: {prob_over:.1f}% | Under: {100-prob_over:.1f}%\n"
-                            f"🔥 *RECOMENDACIÓN: {recomendacion}*"
-                        )
-                        # Lo agregamos a la página web
-                        resultados_html += f"<p style='color:red;'><b>{mensaje.replace(chr(10), '<br>')}</b></p><hr>"
-                        # Lo enviamos a Telegram (imprimimos en consola para debug)
-                        resultado_envio = enviar_alerta_telegram(mensaje)
-                        print(f"Intento de Telegram: {resultado_envio}")
+                        
+                        # 🧠 Revisamos la libreta: Si el partido NO está en la libreta, enviamos la alerta
+                        clave_alerta = f"{event_id}_{recomendacion}"
+                        
+                        if clave_alerta not in ALERTAS_ENVIADAS:
+                            alertas_encontradas += 1
+                            ALERTAS_ENVIADAS.add(clave_alerta) # Lo anotamos en la libreta
+                            
+                            mensaje = (
+                                f"🚨 *¡ALERTA EN VIVO!* 🚨\n"
+                                f"⚽ *[{liga_nombre}]* {nombre}\n"
+                                f"⏱️ Minuto: {minuto}'\n"
+                                f"📊 Marcador: {score_local} - {score_visitante}\n"
+                                f"📈 Stats: {tiros_totales} tiros | {corners_totales} córners\n"
+                                f"⚙️ Ritmo: {factor_ritmo:.2f}x\n"
+                                f"🎯 Over 2.5: {prob_over:.1f}% | Under: {100-prob_over:.1f}%\n"
+                                f"🔥 *RECOMENDACIÓN: {recomendacion}*"
+                            )
+                            resultados_html += f"<p style='color:red;'><b>{mensaje.replace(chr(10), '<br>')}</b></p><hr>"
+                            enviar_alerta_telegram(mensaje)
+                            
         except Exception:
             continue
             
     if partidos_vivos == 0:
         resultados_html += "<p>💤 No hay partidos en vivo en este momento.</p>"
     elif alertas_encontradas == 0:
-        resultados_html += f"<p>✅ Se revisaron {partidos_vivos} partidos, pero no hay ventajas claras.</p>"
+        resultados_html += f"<p>✅ Se revisaron {partidos_vivos} partidos. No hay alertas nuevas (o ya te las enviamos antes).</p>"
         
     return resultados_html
 
 @app.route('/')
 def home():
     return escanear_partidos()
-
-@app.route('/test_telegram')
-def test_telegram():
-    resultado = enviar_alerta_telegram("🧪 ¡Prueba exitosa! Tu bot de fútbol ya puede enviar mensajes a Telegram.")
-    return f"<h2>Resultado de la prueba:</h2><p style='font-size:20px;'>{resultado}</p>"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
