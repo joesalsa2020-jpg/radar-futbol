@@ -1,22 +1,14 @@
 import requests
 import numpy as np
 import os
-import time
 from scipy.stats import poisson
 from datetime import datetime
 from flask import Flask
-import threading
 
-# Leemos las claves secretas desde Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Configuramos el servidor web (Render necesita esto para darnos el plan gratis)
 app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "El Bot de Fútbol está corriendo y vigilando los partidos."
 
 LIGAS_TOP = {
     "eng.1": "Premier League", "eng.3": "League One", "esp.1": "La Liga",
@@ -31,35 +23,29 @@ MEMORIA_EQUIPOS = {}
 
 def enviar_alerta_telegram(mensaje):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Faltan credenciales de Telegram")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
     try:
         requests.post(url, json=payload, timeout=5)
-        print(f"✅ Alerta enviada a Telegram")
     except Exception as e:
-        print(f"Error Telegram: {e}")
+        pass
 
 def obtener_perfil_equipo(liga, team_id):
     if team_id in MEMORIA_EQUIPOS:
         return MEMORIA_EQUIPOS[team_id]
-
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{liga}/teams/{team_id}/schedule"
     distribucion = [0.0] * 6
     total_goles_historicos = 0
-
     try:
         r = requests.get(url, timeout=5)
         eventos = r.json().get('events', [])
         partidos_terminados = [e for e in eventos if e.get('competitions', [{}])[0].get('status', {}).get('type', {}).get('completed')]
         ultimos_5 = partidos_terminados[-5:]
-
         for ev in ultimos_5:
             event_id = ev['id']
             url_summary = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{liga}/summary?event={event_id}"
             data = requests.get(url_summary, timeout=5).json()
-            
             for key_event in data.get('keyEvents', []):
                 tipo = key_event.get('type', {}).get('text', '')
                 if "Goal" in tipo or "Penalty" in tipo:
@@ -72,28 +58,28 @@ def obtener_perfil_equipo(liga, team_id):
                         total_goles_historicos += 1
     except Exception:
         pass
-
     if total_goles_historicos > 0:
         distribucion = [g / total_goles_historicos for g in distribucion]
     else:
         distribucion = [0.15, 0.16, 0.18, 0.18, 0.17, 0.16]
-
     MEMORIA_EQUIPOS[team_id] = distribucion
     return distribucion
 
 def escanear_partidos():
-    print(f"[{datetime.now().strftime('%H:%M')}] Escaneando ligas...")
+    resultados_html = "<h2>Resultados del Escaneo en Vivo</h2>"
+    alertas_encontradas = 0
+    partidos_vivos = 0
     
     for liga_code, liga_nombre in LIGAS_TOP.items():
         url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{liga_code}/scoreboard"
         try:
             r = requests.get(url, timeout=5)
             eventos = r.json().get('events', [])
-            
             for partido in eventos:
                 if partido['status']['type']['state'] != 'in':
                     continue
                 
+                partidos_vivos += 1
                 event_id = partido['id']
                 nombre = partido['name']
                 minuto_str = partido['status'].get('displayClock', '0')
@@ -151,6 +137,7 @@ def escanear_partidos():
                     prob_over = (1 - prob_under) * 100
                 
                 if prob_over > 60 or (100 - prob_over) > 60:
+                    alertas_encontradas += 1
                     recomendacion = "OVER" if prob_over > 60 else "UNDER"
                     mensaje = (
                         f"🚨 *¡ALERTA EN VIVO!* 🚨\n"
@@ -162,21 +149,25 @@ def escanear_partidos():
                         f"🎯 Over 2.5: {prob_over:.1f}% | Under: {100-prob_over:.1f}%\n"
                         f"🔥 *RECOMENDACIÓN: {recomendacion}*"
                     )
-                    print(mensaje)
+                    # Lo agregamos a la página web
+                    resultados_html += f"<p style='color:red;'><b>{mensaje.replace(chr(10), '<br>')}</b></p><hr>"
+                    # Y lo enviamos a Telegram
                     enviar_alerta_telegram(mensaje)
-        except Exception as e:
-            pass
+        except Exception:
+            continue
+            
+    if partidos_vivos == 0:
+        resultados_html += "<p>💤 No hay partidos en vivo en este momento.</p>"
+    elif alertas_encontradas == 0:
+        resultados_html += f"<p>✅ Se revisaron {partidos_vivos} partidos, pero no hay ventajas claras (Over/Under > 60%).</p>"
+        
+    return resultados_html
 
-# Esta función corre el bot en un hilo aparte para que no bloquee la página web
-def bucle_bot():
-    while True:
-        escanear_partidos()
-        time.sleep(300) # Espera 5 minutos
+@app.route('/')
+def home():
+    # Cuando entras a la página, ejecuta el escaneo y muestra el resultado
+    return escanear_partidos()
 
-# Iniciamos el hilo del bot
-threading.Thread(target=bucle_bot, daemon=True).start()
-
-# Render necesita esta parte final para mantener la app encendida
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
