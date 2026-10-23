@@ -7,7 +7,6 @@ from flask import Flask, redirect
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 
 app = Flask(__name__)
 
@@ -15,28 +14,17 @@ SCANNER_ACTIVO = True
 ALERTAS_ENVIADAS = set() 
 MEMORIA_EQUIPOS = {}
 
-# 🌍 LISTA COMPLETA CON LOS CÓDIGOS DE THE ODDS API
 LIGAS_TOP = {
-    "eng.1": {"nombre": "Premier League", "odds_key": "soccer_epl"},
-    "eng.3": {"nombre": "League One", "odds_key": "soccer_england_league1"},
-    "esp.1": {"nombre": "La Liga", "odds_key": "soccer_spain_la_liga"},
-    "ita.1": {"nombre": "Serie A", "odds_key": "soccer_italy_serie_a"},
-    "ger.1": {"nombre": "Bundesliga", "odds_key": "soccer_germany_bundesliga"},
-    "fra.1": {"nombre": "Ligue 1", "odds_key": "soccer_france_ligue_one"},
-    "uefa.champions": {"nombre": "Champions League", "odds_key": "soccer_uefa_champs_league"},
-    "uefa.europa": {"nombre": "Europa League", "odds_key": "soccer_uefa_europa_league"},
-    "uefa.europa.conf": {"nombre": "Conference League", "odds_key": "soccer_uefa_europa_conference_league"},
-    "usa.1": {"nombre": "MLS", "odds_key": "soccer_usa_mls"},
-    "mex.1": {"nombre": "Liga MX", "odds_key": "soccer_mexico_ligamx"},
-    "arg.1": {"nombre": "Liga Argentina", "odds_key": "soccer_argentina_primera_division"},
-    "bra.1": {"nombre": "Brasileirão", "odds_key": "soccer_brazil_campeonato"},
-    "conmebol.libertadores": {"nombre": "Copa Libertadores", "odds_key": "soccer_conmebol_copa_libertadores"},
-    "conmebol.sudamericana": {"nombre": "Copa Sudamericana", "odds_key": "soccer_conmebol_copa_sudamericana"}
+    "eng.1": "Premier League", "eng.3": "League One", "esp.1": "La Liga",
+    "ita.1": "Serie A", "ger.1": "Bundesliga", "fra.1": "Ligue 1",
+    "uefa.champions": "Champions League", "uefa.europa": "Europa League",
+    "uefa.europa.conf": "Conference League", "usa.1": "MLS", "mex.1": "Liga MX",
+    "arg.1": "Liga Argentina", "bra.1": "Brasileirão", 
+    "conmebol.libertadores": "Libertadores", "conmebol.sudamericana": "Sudamericana"
 }
 
 def enviar_alerta_telegram(mensaje):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
     try:
@@ -71,40 +59,55 @@ def obtener_perfil_equipo(liga, team_id):
     MEMORIA_EQUIPOS[team_id] = distribucion
     return distribucion
 
-def convertir_cuota_a_probabilidad(cuota_americana):
-    if cuota_americana < 0:
-        return abs(cuota_americana) / (abs(cuota_americana) + 100) * 100
-    else:
-        return 100 / (cuota_americana + 100) * 100
+def cuota_decimal_a_prob(cuota):
+    if cuota <= 1.0: return 0.0
+    return (1 / cuota) * 100
 
-def obtener_cuota_real(liga_odds_key, equipo_local, equipo_visitante):
-    if not ODDS_API_KEY: return None
-    url = f"https://api.the-odds-api.com/v4/sports/{liga_odds_key}/odds/"
-    params = {"apiKey": ODDS_API_KEY, "regions": "us,eu", "markets": "totals", "oddsFormat": "american"}
-    
+def buscar_cuota_infersports(equipo_local, equipo_visitante):
     try:
-        r = requests.get(url, params=params, timeout=5)
+        r = requests.get("https://api.infersports.dev/v1/events/live", timeout=5)
         if r.status_code != 200: return None
+        eventos = r.json().get('data', [])
         
-        partidos = r.json()
-        palabra_local = equipo_local.split()[0].lower()
-        palabra_visitante = equipo_visitante.split()[0].lower()
+        # Búsqueda inteligente por las dos primeras palabras del equipo
+        palabra_local = " ".join(equipo_local.split()[:2]).lower()
+        palabra_visitante = " ".join(equipo_visitante.split()[:2]).lower()
         
-        for p in partidos:
-            if palabra_local in p['home_team'].lower() and palabra_visitante in p['away_team'].lower():
-                for bookmaker in p['bookmakers']:
-                    if bookmaker['key'] in ['pinnacle', 'draftkings', 'fanduel', 'betmgm']:
-                        for market in bookmaker['markets']:
-                            if market['key'] == 'totals':
-                                over = market['outcomes'][0]
-                                under = market['outcomes'][1]
-                                return {
-                                    "linea": over['point'],
-                                    "prob_over_casa": convertir_cuota_a_probabilidad(over['price']),
-                                    "prob_under_casa": convertir_cuota_a_probabilidad(under['price']),
-                                    "cuota_over": over['price'],
-                                    "cuota_under": under['price']
-                                }
+        event_id = None
+        for ev in eventos:
+            h_team = ev.get('home_team', {}).get('name', '').lower()
+            a_team = ev.get('away_team', {}).get('name', '').lower()
+            
+            # Buscamos coincidencia (puede ser que ESPN diga "Barra FC" e InferSports "Barra SC")
+            # Usamos la primera palabra para ser flexibles
+            h_palabra = equipo_local.split()[0].lower()
+            a_palabra = equipo_visitante.split()[0].lower()
+            
+            if h_palabra in h_team and a_palabra in a_team:
+                event_id = ev['id']
+                break
+                
+        if not event_id: return None
+            
+        r_odds = requests.get(f"https://api.infersports.dev/v1/events/{event_id}/odds?format=decimal", timeout=5)
+        if r_odds.status_code != 200: return None
+        
+        odds_list = r_odds.json().get('odds', [])
+        
+        for odd in odds_list:
+            if odd.get('market_type') == 'totals' and odd.get('period') == 'full_time' and odd.get('status') == 'open':
+                linea = odd.get('line')
+                precio_over = odd.get('prices', {}).get('over', 0)
+                precio_under = odd.get('prices', {}).get('under', 0)
+                
+                if linea and precio_over > 1.0 and precio_under > 1.0:
+                    return {
+                        "linea": linea,
+                        "cuota_over": precio_over,
+                        "cuota_under": precio_under,
+                        "prob_casa_over": cuota_decimal_a_prob(precio_over),
+                        "prob_casa_under": cuota_decimal_a_prob(precio_under)
+                    }
         return None
     except Exception:
         return None
@@ -114,13 +117,13 @@ def escanear_partidos():
     if not SCANNER_ACTIVO:
         return "<h1>🛑 El escáner está pausado.</h1><br><a href='/start'><button style='padding:10px; font-size:16px;'>▶ Reanudar Escáner</button></a>"
 
-    resultados_html = "<h1>Resultados del Escaneo en Vivo</h1>"
+    resultados_html = "<h1>Resultados del Escaneo en Vivo (Cuotas Gratis)</h1>"
     resultados_html += "<a href='/stop'><button style='padding:10px; font-size:16px; background-color:#ff4d4d; color:white; border:none; border-radius:5px;'>🛑 Detener Escáner</button></a><br><br>"
     
     partidos_vivos = 0
     debug_msgs = ""
     
-    for liga_code, liga_info in LIGAS_TOP.items():
+    for liga_code, liga_nombre in LIGAS_TOP.items():
         url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{liga_code}/scoreboard"
         try:
             r = requests.get(url, timeout=5)
@@ -136,7 +139,7 @@ def escanear_partidos():
                 
                 # --- REGLA: Solo evaluar si pasó el minuto 55 ---
                 if minuto < 55: 
-                    debug_msgs += f"<p>⏳ [{liga_info['nombre']}] {nombre} va en el minuto {minuto}. (Muy pronto para apostar).</p>"
+                    debug_msgs += f"<p>⏳ [{liga_nombre}] {nombre} va en el minuto {minuto}. (Muy pronto).</p>"
                     continue
                 
                 comp = partido['competitions'][0]
@@ -147,10 +150,10 @@ def escanear_partidos():
                 score_visitante = int(comp['competitors'][1].get('score', {}).get('displayValue', 0) if isinstance(comp['competitors'][1].get('score'), dict) else comp['competitors'][1].get('score', 0))
                 goles_totales = score_local + score_visitante
                 
-                # --- OBTENER CUOTAS REALES ---
-                cuotas = obtener_cuota_real(liga_info['odds_key'], equipo_local, equipo_visitante)
+                # --- OBTENER CUOTAS REALES (INFERSPORTS) ---
+                cuotas = buscar_cuota_infersports(equipo_local, equipo_visitante)
                 if not cuotas: 
-                    debug_msgs += f"<p>⚠️ [{liga_info['nombre']}] {nombre} (Min {minuto}'). No se encontraron cuotas en The Odds API.</p>"
+                    debug_msgs += f"<p>⚠️ [{liga_nombre}] {nombre} (Min {minuto}'). No se encontraron cuotas abiertas en InferSports.</p>"
                     continue 
                 
                 linea_real = cuotas['linea']
@@ -180,13 +183,13 @@ def escanear_partidos():
                 prob_under_bot = 100.0 - prob_over_bot
                 
                 # --- LÓGICA DE VALOR ---
-                valor_over = prob_over_bot - cuotas['prob_over_casa']
-                valor_under = prob_under_bot - cuotas['prob_under_casa']
+                valor_over = prob_over_bot - cuotas['prob_casa_over']
+                valor_under = prob_under_bot - cuotas['prob_casa_under']
                 
                 if valor_over > 5 or valor_under > 5:
                     recomendacion = "OVER" if valor_over > valor_under else "UNDER"
                     cuota_recomendada = cuotas['cuota_over'] if recomendacion == "OVER" else cuotas['cuota_under']
-                    prob_casa = cuotas['prob_over_casa'] if recomendacion == "OVER" else cuotas['prob_under_casa']
+                    prob_casa = cuotas['prob_casa_over'] if recomendacion == "OVER" else cuotas['prob_casa_under']
                     prob_bot = prob_over_bot if recomendacion == "OVER" else prob_under_bot
                     
                     clave_alerta = f"{event_id}_{recomendacion}_{linea_real}"
@@ -195,7 +198,7 @@ def escanear_partidos():
                         ALERTAS_ENVIADAS.add(clave_alerta)
                         mensaje = (
                             f"🚨 *¡VALOR ENCONTRADO!* 🚨\n"
-                            f"⚽ *[{liga_info['nombre']}]* {nombre}\n"
+                            f"⚽ *[{liga_nombre}]* {nombre}\n"
                             f"⏱️ Minuto: {minuto}'\n"
                             f"📊 Marcador: {score_local} - {score_visitante}\n"
                             f"📈 Stats: {tiros} tiros | {corners} córners\n"
@@ -207,15 +210,15 @@ def escanear_partidos():
                         resultados_html += f"<p style='color:green;'><b>{mensaje.replace(chr(10), '<br>')}</b></p><hr>"
                         enviar_alerta_telegram(mensaje)
                 else:
-                    debug_msgs += f"<p>📉 [{liga_info['nombre']}] {nombre} (Min {minuto}'). Hay cuotas, pero no hay valor (Bot ve {max(prob_over_bot, prob_under_bot):.1f}% vs Casa {max(cuotas['prob_over_casa'], cuotas['prob_under_casa']):.1f}%).</p>"
+                    debug_msgs += f"<p>📉 [{liga_nombre}] {nombre} (Min {minuto}'). Cuotas encontradas, pero sin valor.</p>"
                         
         except Exception:
             continue
             
     if partidos_vivos == 0:
-        resultados_html += "<p>💤 No hay partidos en vivo en este momento en las ligas seleccionadas.</p>"
+        resultados_html += "<p>💤 No hay partidos en vivo en las ligas seleccionadas.</p>"
     else:
-        resultados_html += f"<p>✅ Se encontraron {partidos_vivos} partidos en vivo. Revisa el diagnóstico:</p>"
+        resultados_html += f"<p>✅ Se encontraron {partidos_vivos} partidos en vivo.</p>"
         resultados_html += f"<div style='background-color:#f0f0f0; padding:10px; color:black;'>{debug_msgs}</div>"
         
     return resultados_html
