@@ -167,7 +167,10 @@ def escanear_partidos():
 def home():
     # Cuando entras a la página, ejecuta el escaneo y muestra el resultado
     return escanear_partidos()
-
+@app.route('/test_telegram')
+def test_telegram():
+    enviar_alerta_telegram("🧪 ¡Prueba exitosa! Tu bot de fútbol ya puede enviar mensajes a Telegram.")
+    return "Mensaje de prueba enviado. Revisa tu celular y los Logs de Render."
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
