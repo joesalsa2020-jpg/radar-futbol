@@ -28,7 +28,6 @@ LIGAS_TOP = {
     "conmebol.libertadores": "Libertadores", "conmebol.sudamericana": "Sudamericana"
 }
 
-# --- MANEJO DE MEMORIA (JSON) ---
 def cargar_historial():
     global HISTORIAL, ALERTAS_ENVIADAS
     if os.path.exists(HISTORIAL_FILE):
@@ -46,7 +45,6 @@ def guardar_historial():
 
 cargar_historial()
 
-# --- FUNCIONES BASE ---
 def enviar_alerta_telegram(mensaje):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -87,7 +85,7 @@ def obtener_perfil_equipo(liga, team_id):
     MEMORIA_EQUIPOS[team_id] = distribucion
     return distribucion
 
-# --- API INFERSPORTS (Prioridad Pinnacle) ---
+# --- BÚSQUEDA CON FILTRO DE NOMBRES ---
 def buscar_cuota_infersports(equipo_local, equipo_visitante, periodo="full_time"):
     headers = {}
     if INFERSPORTS_API_KEY:
@@ -99,44 +97,53 @@ def buscar_cuota_infersports(equipo_local, equipo_visitante, periodo="full_time"
         eventos = r.json().get('data', [])
         
         event_id = None
+        palabras_ignorar = ["fc", "sc", "cd", "tsg", "de", "at", "the", "club", "cp", "cf"]
+        
+        def limpiar_nombre(nombre):
+            return [w.lower() for w in nombre.split() if w.lower() not in palabras_ignorar]
+
+        local_palabras = limpiar_nombre(equipo_local)
+        visitante_palabras = limpiar_nombre(equipo_visitante)
+
         for ev in eventos:
             h_team = ev.get('home_team', {}).get('name', '').lower()
             a_team = ev.get('away_team', {}).get('name', '').lower()
-            
-            h_palabra = equipo_local.split()[0].lower()
-            a_palabra = equipo_visitante.split()[0].lower()
-            
-            if h_palabra in h_team and a_palabra in a_team:
+
+            match_local = any(p in h_team for p in local_palabras) if local_palabras else False
+            match_visitante = any(p in a_team for p in visitante_palabras) if visitante_palabras else False
+
+            if match_local and match_visitante:
                 event_id = ev['id']
                 break
                 
-        if not event_id: return None
+        if not event_id: 
+            print(f"   [DEBUG] No se encontró en InferSports: {equipo_local} vs {equipo_visitante}")
+            return None
             
         r_odds = requests.get(f"https://api.infersports.dev/v1/events/{event_id}/odds?format=decimal", headers=headers, timeout=5)
         if r_odds.status_code != 200: return None
         
         odds_list = r_odds.json().get('odds', [])
-        
-        mejor_cuota_pinnacle = None
         mejor_cuota_fallback = None
 
         for odd in odds_list:
-            if odd.get('market_type') == 'totals' and odd.get('period') == periodo and odd.get('status') == 'open':
+            if odd.get('market_type') == 'totals' and odd.get('period') == periodo:
                 linea = odd.get('line')
                 precio_over = odd.get('prices', {}).get('over', 0)
                 precio_under = odd.get('prices', {}).get('under', 0)
                 
                 if linea and precio_over > 1.0 and precio_under > 1.0:
+                    if odd.get('status') == 'suspended':
+                        continue
+
                     datos_odd = {
                         "linea": linea, "cuota_over": precio_over, "cuota_under": precio_under,
                         "prob_casa_over": cuota_decimal_a_prob(precio_over), "prob_casa_under": cuota_decimal_a_prob(precio_under),
                         "bookmaker": odd.get('bookmaker', '')
                     }
                     
-                    # Priorizar Pinnacle
                     if odd.get('bookmaker', '').lower() == 'pinnacle':
                         return datos_odd
-                    # Guardar la primera que encuentre como respaldo
                     elif mejor_cuota_fallback is None:
                         mejor_cuota_fallback = datos_odd
 
@@ -144,20 +151,17 @@ def buscar_cuota_infersports(equipo_local, equipo_visitante, periodo="full_time"
     except Exception:
         return None
 
-# --- VERIFICADOR DE RESULTADOS ---
 def verificar_resultados():
     global HISTORIAL
     pendientes = [h for h in HISTORIAL if h['resultado'] == 'Pendiente']
     actualizado = False
     
     for h in pendientes:
-        # Buscamos el partido en ESPN para ver si ya terminó
         url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{h['liga_code']}/summary?event={h['event_id']}"
         try:
             r = requests.get(url, timeout=5)
             data = r.json()
             
-            # Si el partido está terminado
             if data.get('header', {}).get('competitions', [{}])[0].get('status', {}).get('type', {}).get('state') == 'post':
                 comp = data['header']['competitions'][0]
                 score_local = int(comp['competitors'][0].get('score', '0'))
@@ -166,20 +170,18 @@ def verificar_resultados():
                 
                 goles_ht = 0
                 if h['mercado'] == 'HT':
-                    # Contamos goles antes del minuto 45
                     for ev in data.get('keyEvents', []):
                         if "Goal" in ev.get('type', {}).get('text', ''):
                             minuto = int(''.join(filter(str.isdigit, ev.get('clock', {}).get('displayValue', '0').split('+')[0])))
                             if minuto <= 45:
                                 goles_ht += 1
                 
-                # Evaluamos si ganó o perdió
                 if h['mercado'] == 'HT':
                     if h['recomendacion'] == 'OVER':
                         h['resultado'] = 'Ganada' if goles_ht > h['linea'] else 'Perdida'
                     else:
                         h['resultado'] = 'Ganada' if goles_ht < h['linea'] else 'Perdida'
-                else: # FT
+                else:
                     if h['recomendacion'] == 'OVER':
                         h['resultado'] = 'Ganada' if goles_totales > h['linea'] else 'Perdida'
                     else:
@@ -192,12 +194,11 @@ def verificar_resultados():
     if actualizado:
         guardar_historial()
 
-# --- ESCÁNER PRINCIPAL ---
 def escanear_partidos():
     global SCANNER_ACTIVO
     if not SCANNER_ACTIVO: return
     
-    verificar_resultados() # Verificar apuestas anteriores primero
+    verificar_resultados()
 
     for liga_code, liga_nombre in LIGAS_TOP.items():
         url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{liga_code}/scoreboard"
@@ -233,7 +234,6 @@ def escanear_partidos():
                 fraccion = minuto / 90.0
                 factor_ritmo = max(0.5, min(2.0, ((tiros / max(1, 25 * fraccion)) + (corners / max(1, 10 * fraccion))) / 2.0)) if minuto > 10 else 1.0
 
-                # --- LÓGICA HT ---
                 if 15 <= minuto <= 35 and goles_totales == 0 and factor_ritmo > 1.1:
                     perfil_local = obtener_perfil_equipo(liga_code, comp['competitors'][0]['team']['id'])
                     perfil_visitante = obtener_perfil_equipo(liga_code, comp['competitors'][1]['team']['id'])
@@ -249,12 +249,10 @@ def escanear_partidos():
                                 linea = cuotas_ht['linea']
                                 msj = f"🔥 *¡VALOR ENCONTRADO HT!* 🔥\n⚽ *[{liga_nombre}]* {nombre}\n⏱️ Minuto: {minuto}'\n📊 Marcador: {score_local} - {score_visitante}\n📈 Stats: {tiros} tiros | {corners} córners\n🎯 Línea HT: {linea}\n💰 Cuota OVER: {cuotas_ht['cuota_over']:.2f} ({cuotas_ht['bookmaker']})\n🔥 *RECOMENDACIÓN: OVER HT*"
                             else:
-                                linea = 0.5 # Línea por defecto si no hay cuota
+                                linea = 0.5
                                 msj = f"🔥 *¡ALERTA DE GOL HT!* 🔥\n⚽ *[{liga_nombre}]* {nombre}\n⏱️ Minuto: {minuto}'\n📊 Marcador: {score_local} - {score_visitante}\n📈 Stats: {tiros} tiros | {corners} córners\n⚠️ _Cuota HT no disponible._\n🔥 *RECOMENDACIÓN: OVER HT*"
                             
                             enviar_alerta_telegram(msj)
-                            
-                            # Guardar en historial
                             HISTORIAL.append({
                                 "id": clave, "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
                                 "liga_code": liga_code, "event_id": event_id, "partido": nombre,
@@ -264,7 +262,6 @@ def escanear_partidos():
                             })
                             guardar_historial()
 
-                # --- LÓGICA FT ---
                 elif 55 <= minuto <= 80:
                     clave_ft = f"{event_id}_FT"
                     if clave_ft not in ALERTAS_ENVIADAS:
@@ -308,7 +305,6 @@ def escanear_partidos():
         except Exception:
             continue
 
-# --- DISEÑO DEL DASHBOARD (HTML) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -376,13 +372,11 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- RUTAS FLASK ---
 @app.route('/')
 def home():
     if SCANNER_ACTIVO:
-        escanear_partidos() # Escanea al entrar a la página
+        escanear_partidos()
     
-    # Calcular estadísticas
     total = len(HISTORIAL)
     ganadas = sum(1 for h in HISTORIAL if h['resultado'] == 'Ganada')
     perdidas = sum(1 for h in HISTORIAL if h['resultado'] == 'Perdida')
@@ -392,7 +386,7 @@ def home():
     return render_template_string(
         HTML_TEMPLATE, 
         scanner_activo=SCANNER_ACTIVO,
-        historial=reversed(HISTORIAL), # Mostrar las más recientes primero
+        historial=reversed(HISTORIAL),
         total=total, ganadas=ganadas, perdidas=perdidas, winrate=winrate
     )
 
