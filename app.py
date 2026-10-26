@@ -364,13 +364,13 @@ def loop_escaner():
                 ESTADO_INFO["vivos"] = vivos
                 ESTADO_INFO["ultimo_scan"] = datetime.now().strftime("%H:%M:%S")
                 ESTADO_INFO["ciclо"] += 1
-                print(f"[{ESTADO_INFO['ultimo_scan']}] Vivos: {vivos} | Alertas: {len(HISTORIAL)} | Caché: {len(MEMORIA_EQUIPOS)}")
+                print(f"[{ESTADO_INFO['ultimo_scan']}] Vivos: {vivos} | Alertas: {len(HISTORIAL)} | Caché: {len(MEMORIA_EQUIPOS)}", flush=True)
             else:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Pausado")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Pausado", flush=True)
             if len(ALERTAS_ENVIADAS) > 500:
                 ALERTAS_ENVIADAS.clear()
         except Exception as e:
-            print(f"Loop err: {e}")
+            print(f"Loop err: {e}", flush=True)
         time.sleep(300)
 
 # ==== DASHBOARD HTML ====
@@ -484,7 +484,7 @@ def ping():
 def _start_scanner():
     t = threading.Thread(target=loop_escaner, daemon=True)
     t.start()
-    print("🚀 Hilo del escáner iniciado")
+    print("🚀 Hilo del escáner iniciado", flush=True)
 
 _start_scanner()
 
