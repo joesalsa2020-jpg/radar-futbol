@@ -296,13 +296,14 @@ def escanear_partidos():
                                 valor = prob - cuotas['prob_casa_over']
                                 msj = (f"🔥 *VALOR HT* 🔥\n⚽ *[{liga_nombre}]* {nombre}\n"
                                        f"⏱️ {minuto}' | 0-0 | {tiros} tiros, {corners} córners (Ritmo {factor:.2f}x)\n"
-                                       f"🎯 Línea {linea} | Cuota O: {cuotas['cuota_over']:.2f} ({cuotas['bookmaker']})\n"
+                                       f"🔥 *RECOMENDACIÓN: OVER {linea} @ {cuotas['cuota_over']:.2f}* ({cuotas['bookmaker']})\n"
                                        f"📊 Bot: *{prob:.1f}%* vs Casa: {cuotas['prob_casa_over']:.1f}% → Edge {valor:+.1f}%")
                                 cuota_reg = cuotas['cuota_over']
                             else:
                                 linea = 0.5
                                 msj = (f"🔥 *ALERTA GOL HT* 🔥\n⚽ *[{liga_nombre}]* {nombre}\n"
                                        f"⏱️ {minuto}' | 0-0 | {tiros} tiros, {corners} córners (Ritmo {factor:.2f}x)\n"
+                                       f"🔥 *RECOMENDACIÓN: OVER 0.5 HT*\n"
                                        f"📊 Prob gol antes descanso: *{prob:.1f}%*\n⚠️ Sin cuota disponible.")
                                 cuota_reg = 0
                             enviar_alerta_telegram(msj)
@@ -339,9 +340,8 @@ def escanear_partidos():
                                 vv = v_o if rec == "OVER" else v_u
                                 msj = (f"🚨 *VALOR FT* 🚨\n⚽ *[{liga_nombre}]* {nombre}\n"
                                        f"⏱️ {minuto}' | {sl}-{sv} | {tiros} tiros, {corners} córners (Ritmo {factor:.2f}x)\n"
-                                       f"🎯 Línea {linea} | Cuota {rec}: {cf:.2f} ({cuotas['bookmaker']})\n"
-                                       f"📊 Bot: *{pb:.1f}%* vs Casa: {pc:.1f}% → Edge {vv:+.1f}%\n"
-                                       f"🔥 *RECOMENDACIÓN: {rec}*")
+                                       f"🔥 *RECOMENDACIÓN: {rec} {linea} @ {cf:.2f}* ({cuotas['bookmaker']})\n"
+                                       f"📊 Bot: *{pb:.1f}%* vs Casa: {pc:.1f}% → Edge {vv:+.1f}%")
                                 enviar_alerta_telegram(msj)
                                 HISTORIAL.append({
                                     "id": clave, "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -479,8 +479,6 @@ def ping():
     return "pong", 200
 
 # ==== ARRANQUE ====
-# En Render, Flask debe ser el proceso principal, pero el hilo background
-# se lanza UNA sola vez al importar (evita duplicados con el reloader)
 def _start_scanner():
     t = threading.Thread(target=loop_escaner, daemon=True)
     t.start()
