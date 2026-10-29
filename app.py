@@ -316,7 +316,7 @@ def escanear_partidos():
                             guardar_historial()
 
                 # FT
-                elif 55 <= minuto <= 80:
+                elif 70 <= minuto <= 80:
                     clave = f"{event_id}_FT"
                     if clave not in ALERTAS_ENVIADAS:
                         cuotas = buscar_cuota_infersports(eq_l, eq_v, "full_time")
