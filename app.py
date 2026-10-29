@@ -3,7 +3,7 @@ from scipy.stats import poisson
 from datetime import datetime
 from flask import Flask, redirect, render_template_string
 
-# ==== VARIABLES DE ENTORNO (se configuran en Render) ====
+# ==== VARIABLES DE ENTORNO ====
 TELEGRAM_TOKEN      = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID    = os.environ.get("TELEGRAM_CHAT_ID")
 INFERSPORTS_API_KEY = os.environ.get("INFERSPORTS_API_KEY")
@@ -84,7 +84,7 @@ def _parse_score(val):
     try: return int(val or 0)
     except: return 0
 
-# ==== PERFIL DE EQUIPO (con GF/GA y caché 2 días) ====
+# ==== PERFIL DE EQUIPO ====
 def obtener_perfil_equipo(liga, team_id):
     ahora = time.time()
     if team_id in MEMORIA_EQUIPOS:
@@ -146,7 +146,7 @@ def obtener_perfil_equipo(liga, team_id):
         MEMORIA_EQUIPOS[team_id] = entry
     return entry
 
-# ==== CÁLCULO λ Y PROBABILIDADES ====
+# ==== CÁLCULO λ ====
 def calcular_lambdas(pl, pv):
     return ((pl['gf_avg'] + pv['ga_avg']) / 2.0,
             (pv['gf_avg'] + pl['ga_avg']) / 2.0)
@@ -244,7 +244,7 @@ def verificar_resultados():
     if actualizado:
         guardar_historial()
 
-# ==== ESCANEO (un ciclo) ====
+# ==== ESCANEO ====
 def escanear_partidos():
     global HISTORIAL
     vivos = 0
@@ -309,13 +309,13 @@ def escanear_partidos():
                             enviar_alerta_telegram(msj)
                             HISTORIAL.append({
                                 "id": clave, "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                "liga_code": liga_code, "event_id": event_id, "partido": nombre,
+                                "liga_code": liga_code, "event_id": event_id, "partido": nombre, "liga_nombre": liga_nombre,
                                 "mercado": "HT", "recomendacion": "OVER", "linea": linea,
                                 "cuota": cuota_reg, "resultado": "Pendiente"
                             })
                             guardar_historial()
 
-                # FT
+                # FT (A PARTIR DEL MINUTO 70)
                 elif 70 <= minuto <= 80:
                     clave = f"{event_id}_FT"
                     if clave not in ALERTAS_ENVIADAS:
@@ -345,7 +345,7 @@ def escanear_partidos():
                                 enviar_alerta_telegram(msj)
                                 HISTORIAL.append({
                                     "id": clave, "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                    "liga_code": liga_code, "event_id": event_id, "partido": nombre,
+                                    "liga_code": liga_code, "event_id": event_id, "partido": nombre, "liga_nombre": liga_nombre,
                                     "mercado": "FT", "recomendacion": rec, "linea": linea,
                                     "cuota": cf, "resultado": "Pendiente"
                                 })
@@ -354,7 +354,7 @@ def escanear_partidos():
             continue
     return vivos
 
-# ==== HILO DE FONDO (escanea cada 5 min sin importar la web) ====
+# ==== HILO DE FONDO ====
 def loop_escaner():
     while True:
         try:
@@ -373,73 +373,133 @@ def loop_escaner():
             print(f"Loop err: {e}", flush=True)
         time.sleep(300)
 
-# ==== DASHBOARD HTML ====
+# ==== DASHBOARD HTML (ESTILO NBA) ====
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Panel Bot</title>
+    <title>Panel del Bot (Soccer)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="refresh" content="30">
     <style>
-        body { font-family: -apple-system, Arial, sans-serif; background: #0e0e10; color: #eee; padding: 16px; max-width: 900px; margin: auto; }
-        h1 { margin: 0 0 16px; font-size: 22px; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 10px; flex-wrap: wrap; }
-        .btn { padding: 12px 22px; border: none; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; text-decoration: none; color: white; display: inline-block; }
-        .btn-stop { background: #e53935; }
-        .btn-start { background: #43a047; }
-        .badge { padding: 6px 12px; border-radius: 6px; font-size: 12px; }
-        .badge-on { background: #43a047; }
-        .badge-off { background: #e53935; }
-        .stats { background: #1a1a1e; padding: 16px; border-radius: 10px; margin-bottom: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 12px; text-align: center; }
-        .stat-label { font-size: 11px; color: #999; text-transform: uppercase; }
-        .stat-value { font-size: 20px; font-weight: bold; margin-top: 4px; }
-        .info { font-size: 12px; color: #888; margin-bottom: 16px; text-align: center; }
-        table { width: 100%; border-collapse: collapse; background: #1a1a1e; border-radius: 10px; overflow: hidden; font-size: 13px; }
-        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #2a2a2e; }
-        th { background: #26262b; font-size: 11px; text-transform: uppercase; color: #aaa; }
-        .ganada { color: #43a047; font-weight: bold; }
-        .perdida { color: #e53935; font-weight: bold; }
-        .pendiente { color: #ffb300; }
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --green: #10b981;
+            --red: #ef4444;
+            --yellow: #eab308;
+            --blue: #3b82f6;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text-main); padding: 16px; max-width: 800px; margin: auto; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        h1 { margin: 0; font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .btn { padding: 10px 16px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; color: white; transition: 0.2s; }
+        .btn-stop { background: var(--red); }
+        .btn-start { background: var(--green); }
+        
+        .info-bar { display: flex; justify-content: space-between; background: var(--card-bg); padding: 12px 16px; border-radius: 12px; margin-bottom: 20px; font-size: 13px; color: var(--text-muted); }
+        .info-bar span { font-weight: bold; color: var(--text-main); }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+        .badge-on { background: rgba(16, 185, 129, 0.2); color: var(--green); }
+        .badge-off { background: rgba(239, 68, 68, 0.2); color: var(--red); }
+
+        .stats { background: var(--card-bg); padding: 20px; border-radius: 12px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; text-align: center; }
+        .stat-item { display: flex; flex-direction: column; gap: 4px; }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-value { font-size: 22px; font-weight: bold; }
+        .v-green { color: var(--green); }
+        .v-red { color: var(--red); }
+        .v-yellow { color: var(--yellow); }
+
+        .section-title { font-size: 13px; font-weight: bold; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+        
+        .card-list { display: flex; flex-direction: column; gap: 12px; }
+        .card { background: var(--card-bg); border-radius: 12px; padding: 16px; border-left: 4px solid var(--yellow); display: flex; flex-direction: column; gap: 8px; }
+        .card.ganada { border-left-color: var(--green); }
+        .card.perdida { border-left-color: var(--red); }
+        
+        .card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .card-title { font-size: 15px; font-weight: bold; margin: 0; }
+        .card-liga { font-size: 12px; color: var(--text-muted); }
+        
+        .card-body { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+        .bet-info { font-size: 14px; font-weight: bold; color: var(--blue); }
+        .bet-cuota { font-size: 14px; color: var(--text-main); }
+        
+        .card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px; }
+        .edge { background: rgba(16, 185, 129, 0.15); color: var(--green); padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+        .time { color: var(--text-muted); }
+        .res-badge { font-weight: bold; font-size: 11px; padding: 4px 8px; border-radius: 4px; }
+        .res-pendiente { color: var(--yellow); }
+        .res-ganada { color: var(--green); }
+        .res-perdida { color: var(--red); }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🤖 Panel del Bot</h1>
+        <h1>⚽ Radar Fútbol</h1>
         {% if scanner_activo %}
             <a href="/stop" class="btn btn-stop">🛑 Detener</a>
         {% else %}
             <a href="/start" class="btn btn-start">▶ Reanudar</a>
         {% endif %}
     </div>
-    <div class="info">
-        Estado: <span class="badge {% if scanner_activo %}badge-on{% else %}badge-off{% endif %}">
-        {% if scanner_activo %}ACTIVO{% else %}PAUSADO{% endif %}</span>
-        &nbsp;|&nbsp; Último scan: {{ ultimo_scan }}
-        &nbsp;|&nbsp; Vivos: {{ vivos }}
-        &nbsp;|&nbsp; Iniciado: {{ inicio }}
+
+    <div class="info-bar">
+        <div>Estado: <span class="badge {% if scanner_activo %}badge-on{% else %}badge-off{% endif %}">{% if scanner_activo %}ACTIVO{% else %}PAUSADO{% endif %}</span></div>
+        <div>Último scan: <span>{{ ultimo_scan }}</span></div>
+        <div>Vivos: <span>{{ vivos }}</span></div>
     </div>
+
     <div class="stats">
-        <div><div class="stat-label">Total</div><div class="stat-value">{{ total }}</div></div>
-        <div><div class="stat-label">Ganadas</div><div class="stat-value ganada">{{ ganadas }}</div></div>
-        <div><div class="stat-label">Perdidas</div><div class="stat-value perdida">{{ perdidas }}</div></div>
-        <div><div class="stat-label">Pendientes</div><div class="stat-value pendiente">{{ pendientes }}</div></div>
-        <div><div class="stat-label">Win rate</div><div class="stat-value">{{ winrate }}%</div></div>
+        <div class="stat-item">
+            <div class="stat-label">Total</div>
+            <div class="stat-value">{{ total }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Ganadas</div>
+            <div class="stat-value v-green">{{ ganadas }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Perdidas</div>
+            <div class="stat-value v-red">{{ perdidas }}</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value v-yellow">{{ winrate }}%</div>
+        </div>
     </div>
-    <table>
-        <tr><th>Fecha</th><th>Partido</th><th>Mkt</th><th>Rec</th><th>Línea</th><th>Cuota</th><th>Res.</th></tr>
+
+    <div class="section-title">Señales Recientes</div>
+    <div class="card-list">
         {% for a in historial %}
-        <tr>
-            <td>{{ a.fecha }}</td>
-            <td>{{ a.partido }}</td>
-            <td>{{ a.mercado }}</td>
-            <td>{{ a.recomendacion }}</td>
-            <td>{{ a.linea }}</td>
-            <td>{{ a.cuota }}</td>
-            <td class="{{ a.resultado|lower }}">{{ a.resultado }}</td>
-        </tr>
+        <div class="card {{ a.resultado|lower }}">
+            <div class="card-header">
+                <div>
+                    <p class="card-title">{{ a.partido }}</p>
+                    <span class="card-liga">{{ a.liga_nombre }} | {{ a.mercado }}</span>
+                </div>
+                <span class="res-badge res-{{ a.resultado|lower }}">{{ a.resultado|upper }}</span>
+            </div>
+            
+            <div class="card-body">
+                <div class="bet-info">{{ a.recomendacion }} {{ a.linea }}</div>
+                <div class="bet-cuota">@ {{ a.cuota }}</div>
+            </div>
+            
+            <div class="card-footer">
+                <div class="time">{{ a.fecha }}</div>
+            </div>
+        </div>
+        {% else %}
+        <div style="text-align: center; color: var(--text-muted); padding: 20px;">
+            No hay señales todavía. El bot está escaneando...
+        </div>
         {% endfor %}
-    </table>
+    </div>
 </body>
 </html>
 """
@@ -447,19 +507,21 @@ HTML_TEMPLATE = """
 # ==== RUTAS FLASK ====
 @app.route('/')
 def home():
+    cargar_historial() # ¡Esto arregla que el panel se quede en 0!
+    
     total = len(HISTORIAL)
     ganadas = sum(1 for h in HISTORIAL if h.get('resultado') == 'Ganada')
     perdidas = sum(1 for h in HISTORIAL if h.get('resultado') == 'Perdida')
-    pendientes = sum(1 for h in HISTORIAL if h.get('resultado') == 'Pendiente')
     ev = ganadas + perdidas
     wr = round((ganadas / ev * 100), 1) if ev else 0.0
+    
     return render_template_string(
         HTML_TEMPLATE,
         scanner_activo=SCANNER_ACTIVO,
-        historial=list(reversed(HISTORIAL))[-100:],
-        total=total, ganadas=ganadas, perdidas=perdidas, pendientes=pendientes,
+        historial=list(reversed(HISTORIAL))[-50:], 
+        total=total, ganadas=ganadas, perdidas=perdidas,
         winrate=wr, ultimo_scan=ESTADO_INFO["ultimo_scan"],
-        vivos=ESTADO_INFO["vivos"], inicio=ESTADO_INFO["inicio"]
+        vivos=ESTADO_INFO["vivos"]
     )
 
 @app.route('/stop')
